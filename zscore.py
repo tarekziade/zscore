@@ -1,31 +1,28 @@
 """
-Right now, raptor cold page load tests are based on running 25 times
-the same test and looking at the median value. This big number
-will make outliers have a small impact on the final result,
-but forces us to run 25 browser cycles, which is time
-and resource consuming. If we can reduce that number, it
-will have a positive impact by reducing tests duration
-(XXX measure how much).
+(Desktop only, tp6 for now)
 
-My new proposal is to do only 8 samples and check the zscore
-of the results to detect outliers in that series. If we
-find outliers, we discard them and replace them with new
-measures until we don't have any. If we reach 25 cycles
-we just do the usual median on the 25 series.
+Right now, raptor cold page load tests are based on running 25 times the same
+test and looking at the median value. This big number will make outliers have a
+small impact on the final result, but forces us to run 25 browser cycles, which
+is time and resource consuming. If we can reduce that number, it will have a
+positive impact by reducing tests duration (XXX measure how much).
 
-In order to validate or invalidate this new technique,
-we'll add a new metrics in raptor runs that will simply
-run the algorithm on existing 25 series and add the new
-metrics alonside the old one, so we can compare them
-in a span of a few weeks in treeherder.
+My new proposal is to do only 8 samples and check the zscore of the results to
+detect outliers in that series. If we find outliers, we discard them and replace
+them with new measures until we don't have any. If we reach 25 cycles we just do
+the usual median on the 25 series.
 
-If the results are following the same trend (the baseline
-will be a bit different, but we want to make sure we have
-comparable trends) we can drop the 25 cycles and implement that
-new technique.
+In order to validate or invalidate this new technique, we'll add a new metrics
+in raptor runs that will simply run the algorithm on existing 25 series and add
+the new metrics alonside the old one, so we can compare them in a span of a few
+weeks in treeherder.
 
-For a first test, I worked on the loadtime value, using a
-zscore of 1.7 for the threshold of outliers.
+If the results are following the same trend (the baseline will be a bit
+different, but we want to make sure we have comparable trends) we can drop the
+25 cycles and implement that new technique.
+
+For a first test, I worked on the loadtime value, using a zscore of 1.7 for the
+threshold of outliers.
 """
 from math import sqrt
 
@@ -173,6 +170,7 @@ s4 = [
 all = [s, s2, s3, s4, weird]
 
 
+# current raptor median function
 def median(series):
     series = sorted(series)
     if len(series) % 2:
@@ -183,24 +181,24 @@ def median(series):
 
 
 def zscore(series):
-    sum_sq = x_bar = 0
-    for i, val in enumerate(series):
-        x_bar += val
-        sum_sq += val * val
-    n = 1 + i
-    x_bar *= 1.0 / n
-    std = sqrt(1.0 / i * sum_sq - (float(n) / i) * x_bar * x_bar)
+    """Calculates the zscores given a series of numbers.
+    """
+    length = len(series)
+    x_bar = sum(series) * 1.0 / length
+    sum_sq = sum([measure ** 2 for measure in series])
+    index = length - 1
+    std_dev = sqrt(1.0 / index * sum_sq - (float(length) / index) * x_bar ** 2)
 
-    def zscore(v):
-        res = abs((v - x_bar) / std)
-        return res
+    def abs_zscore(v):
+        return abs((v - x_bar) / std_dev)
 
-    return [zscore(v) for v in series]
+    return [abs_zscore(v) for v in series]
 
 
-def progressive(series):
-    i = 8
-    initial = sorted(series[:i])
+def progressive_median(series, measures=9):
+    """New median.
+    """
+    initial = sorted(series[:measures])
     perms = 0
 
     while True:
@@ -220,19 +218,27 @@ def progressive(series):
                 continue
             new.append(v)
         for x in range(len(outliers)):
-            if i > len(series) - 1:
+            if measures > len(series) - 1:
                 # we reached the end
-                print("Failed")
-                return median(series)
-            new.append(series[i])
-            i += 1
+                return -1, median(series)
+            new.append(series[measures])
+            measures += 1
         initial = new
-    print("permutations %d" % perms)
-    return median(initial)
+    return perms, median(initial)
 
 
 for r in all:
-    print("Progressive %d" % progressive(r))
-    print("Median %d" % median(r))
+    original = median(r)
+    print("%d = original median" % original)
+    for i in (4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15):
+        perms, res = progressive_median(r, i)
+        if perms == -1:
+            print("Failed - progressive using %d samples" % i)
+            continue
+        delta = abs(original - res)
+        print(
+            "%d = %d delta - progressive using %d samples (%d perms)"
+            % (res, delta, i, perms)
+        )
     print("")
     print("")
